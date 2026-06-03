@@ -1,0 +1,11 @@
+{
+  "enabled": false,
+  "timezone": "Asia/Tokyo",
+  "recipients": [],
+  "schedules": [
+    {
+      "type": "daily",
+      "time": "21:00"
+    }
+  ]
+}

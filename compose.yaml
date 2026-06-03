@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: ${APP_IMAGE}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && npm run start"
+
+  worker:
+    image: ${WORKER_IMAGE}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && npm run worker"
+
+  linebot:
+    image: ${LINEBOT_IMAGE}
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      KAKEIBO_API_BASE_URL: http://app:3000
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET}
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
+      LINE_ALLOWED_USER_IDS: ${LINE_ALLOWED_USER_IDS}
+      SESSION_TTL_MINUTES: ${SESSION_TTL_MINUTES:-15}
+      SUMMARY_SCHEDULE_CONFIG_PATH: ${SUMMARY_SCHEDULE_CONFIG_PATH:-/app/config/summary-schedule.json}
+    volumes:
+      - ./summary-schedule.json:/app/config/summary-schedule.json:ro
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      - app
+
+volumes:
+  postgres-data:
