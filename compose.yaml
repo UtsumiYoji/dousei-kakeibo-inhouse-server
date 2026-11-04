@@ -19,8 +19,6 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL}
-    ports:
-      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,10 +47,20 @@ services:
       SUMMARY_SCHEDULE_CONFIG_PATH: ${SUMMARY_SCHEDULE_CONFIG_PATH:-/app/config/summary-schedule.json}
     volumes:
       - ./summary-schedule.json:/app/config/summary-schedule.json:ro
-    ports:
-      - "127.0.0.1:3001:3001"
     depends_on:
       - app
+
+  # 公開経路。ホストのポートは開けず、Docker ネットワーク内の app / linebot へ転送する。
+  # 公開ホスト名と転送先は Cloudflare 側のトンネル設定(remote-managed)で管理する。
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      - app
+      - linebot
 
 volumes:
   postgres-data:
