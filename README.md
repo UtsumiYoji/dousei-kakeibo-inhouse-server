@@ -8,6 +8,7 @@
 - `app`: `dousei-kakeibo` Next.js app
 - `worker`: 自動支出生成worker
 - `linebot`: LINE支出登録bot
+- `db-backup`: 毎日 `pg_dump` して `./backups` へ出力
 - `cloudflared`: Cloudflare Tunnel(外部公開の経路)
 
 どのサービスもホストのポートにはバインドしません。`linebot` はDockerネットワーク内で `http://app:3000` を呼び、外部からのアクセスは `cloudflared` 経由でのみ `app` / `linebot` に届きます。
@@ -80,6 +81,30 @@ docker compose down -v
 - LINE DevelopersのWebhook URLには `https://dousei-kakeibo-linebot.utsumiyoji.com/webhook/line` を設定します。
 
 公開をやめる場合は `docker compose down` し、Cloudflare側でトンネル(と自動作成されたDNSレコード、Accessアプリケーション)を削除します。
+
+## DB backup
+
+`db-backup` サービスが毎日 `BACKUP_TIME`(既定 `03:00` JST)に `pg_dump --format=custom` を実行し、`./backups/kakeibo-YYYYmmdd-HHMMSS.dump` を出力します。ローカルには `BACKUP_KEEP_DAYS`(既定14日)分を残し、それより古いものは削除します。
+
+- 書き込み中のファイルは `.kakeibo-*.dump.partial` という隠しファイル名で、完了後にリネームします。同期ツールでは `.*` を除外してください。
+- ファイルはホストのユーザー(`BACKUP_UID`/`BACKUP_GID`、既定 `1000`)の所有で作成されます。
+- `./backups` が存在しないと `db-backup` は起動しません(rootが所有するディレクトリが自動で作られるのを防ぐため)。リポジトリに `backups/.gitkeep` を含めています。
+
+pCloudなど外部への転送は、ホスト側の [pcloud-sync-manager](https://github.com/UtsumiYoji/pcloud-sync-manager) でこのディレクトリを同期します(`mode: copy`)。
+
+手動で今すぐバックアップ:
+
+```bash
+docker compose exec db-backup db-backup.sh --once
+```
+
+リストア(現在のDBの内容を置き換えます):
+
+```bash
+docker compose stop app worker linebot
+docker compose exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner' < backups/kakeibo-YYYYmmdd-HHMMSS.dump
+docker compose start app worker linebot
+```
 
 ## Scheduled LINE summary
 
