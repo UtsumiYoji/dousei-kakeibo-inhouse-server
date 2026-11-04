@@ -8,8 +8,9 @@
 - `app`: `dousei-kakeibo` Next.js app
 - `worker`: 自動支出生成worker
 - `linebot`: LINE支出登録bot
+- `cloudflared`: Cloudflare Tunnel(外部公開の経路)
 
-`linebot` はDockerネットワーク内で `http://app:3000` を呼びます。既存の家計簿APIは外部公開せず、ホストの `127.0.0.1:3000` にだけ公開します。
+どのサービスもホストのポートにはバインドしません。`linebot` はDockerネットワーク内で `http://app:3000` を呼び、外部からのアクセスは `cloudflared` 経由でのみ `app` / `linebot` に届きます。
 
 ## Setup
 
@@ -17,7 +18,7 @@
 cp .env.example .env
 ```
 
-`.env` の値を自宅サーバー用に変更します。
+`.env` の値を自宅サーバー用に変更します。`.env` はgit管理外なので、本番サーバー上で `.env.example` からコピーして作成します。
 
 ```env
 POSTGRES_PASSWORD=change-me
@@ -29,6 +30,15 @@ LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
 LINE_ALLOWED_USER_IDS=...
 SUMMARY_SCHEDULE_CONFIG_PATH=/app/config/summary-schedule.json
+TUNNEL_TOKEN=...
+```
+
+- `POSTGRES_PASSWORD` と `DATABASE_URL` 内のパスワードは必ず同じ値に変更します。
+- `LINE_ALLOWED_USER_IDS` は、起動後にLINEで `ユーザーID` と送って確認した値を設定します。
+- `TUNNEL_TOKEN` は下記「Cloudflare Tunnel」で作成したトンネルのトークンです。
+
+```bash
+chmod 600 .env
 ```
 
 起動:
@@ -40,7 +50,7 @@ docker compose up -d
 ログ:
 
 ```bash
-docker compose logs -f app worker linebot
+docker compose logs -f app worker linebot cloudflared
 ```
 
 停止:
@@ -55,15 +65,21 @@ DB volumeも削除する場合:
 docker compose down -v
 ```
 
-## Reverse proxy
+## Cloudflare Tunnel
 
-LINE Webhookは公開HTTPS URLが必要です。既存のnginx、Caddy、Cloudflare Tunnelなどで以下へ転送してください。
+外部公開は `cloudflared` サービスが担います。トンネルはCloudflare側で設定を管理する方式(remote-managed)で、公開ホスト名と転送先はダッシュボード(Zero Trust → Networks → Tunnels)で設定します。
 
-```text
-https://<your-domain>/<path> -> http://127.0.0.1:3001/webhook/line
-```
+| 公開ホスト名 | 転送先 | path | Cloudflare Access |
+| --- | --- | --- | --- |
+| `dousei-kakeibo.utsumiyoji.com` | `http://app:3000` | (すべて) | **あり** |
+| `dousei-kakeibo-linebot.utsumiyoji.com` | `http://linebot:3001` | `^/webhook/line$` | なし |
+| (上記以外) | `http_status:404` | | |
 
-Webアプリを外から開く場合は、同じく既存プロキシから `http://127.0.0.1:3000` へ転送します。外部公開する場合は、プロキシ側で認証やIP制限を検討してください。
+- Webアプリにはログイン機能がないため、`dousei-kakeibo.utsumiyoji.com` は必ずCloudflare Accessで保護します。`linebot` はDockerネットワーク内で `app` を呼ぶため、Accessの影響を受けません。
+- LINE Webhookのホスト名にAccessを設定すると、LINEプラットフォームから届かなくなります。代わりに `path` で `/webhook/line` だけを通し、リクエストはLINE SDKの署名検証と `LINE_ALLOWED_USER_IDS` で制限します。
+- LINE DevelopersのWebhook URLには `https://dousei-kakeibo-linebot.utsumiyoji.com/webhook/line` を設定します。
+
+公開をやめる場合は `docker compose down` し、Cloudflare側でトンネル(と自動作成されたDNSレコード、Accessアプリケーション)を削除します。
 
 ## Scheduled LINE summary
 
@@ -114,7 +130,13 @@ docker compose config
 linebot health:
 
 ```bash
-curl http://127.0.0.1:3001/health
+docker compose exec linebot node -e "fetch('http://localhost:3001/health').then(r=>r.text()).then(console.log)"
+```
+
+トンネル接続:
+
+```bash
+docker compose logs cloudflared | grep "Registered tunnel connection"
 ```
 
 コンテナ内疎通:
